@@ -4,7 +4,7 @@
   "description": "SkyStream plugins repository",
   "private": true,
   "scripts": {
-    "deploy": "skystream deploy -u https://raw.githubusercontent.com/Elv0nne/anime47-repo/main/"
+    "deploy": "skystream deploy -u https://raw.githubusercontent.com/Elv0nne/skystream/main/"
   },
   "devDependencies": {
     "skystream-extractors": "latest"
