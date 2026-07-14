@@ -11,18 +11,25 @@
      *   SkyStream JS-plugin không có UI riêng cho việc này nên theo yêu cầu, tài khoản dùng chung
      *   được hardcode thẳng bên dưới (ACCOUNT_EMAIL / ACCOUNT_PASSWORD). Đổi lại giá trị của bạn.
      *
-     * GIỚI HẠN KHÔNG PORT ĐƯỢC:
-     * - Bản gốc có `getVideoInterceptor()` (OkHttp Interceptor) để vá lỗi offset byte MPEG-TS
-     *   cho các CDN dạng `nonprofit.asia` / `cdn<N>.nonprofit...` (tìm packet sync-byte 0x47 và
-     *   cắt bỏ phần rác ở đầu response). SkyStream JS runtime KHÔNG cung cấp hook để can thiệp vào
-     *   luồng byte của response khi player đang phát (http_get/http_post chỉ dùng để lấy dữ liệu
-     *   trang, không nằm trong pipeline phát video). Nên phần vá byte này không thể tái tạo ở tầng
-     *   plugin JS — nếu stream từ CDN đó bị lỗi phát, đó là giới hạn nền tảng, không phải bug plugin.
+     * VÁ LỖI MPEG-TS (CDN nonprofit.asia):
+     * - Bản gốc dùng `getVideoInterceptor()` (OkHttp Interceptor) để cắt bỏ vài byte rác ở đầu mỗi
+     *   segment .ts từ CDN `cdn<N>.nonprofit.asia` (server FE/vlogphim.net) — nếu không vá, player
+     *   không tìm được sync-byte MPEG-TS hợp lệ và không phát được gì.
+     * - SkyStream JS runtime không có hook can thiệp byte-stream khi player đang phát, nên không
+     *   thể port y hệt ở tầng plugin. Giải pháp: một Cloudflare Worker riêng (xem worker.js cùng
+     *   thư mục) đứng giữa player và CDN, tự tải + vá byte + trả lại dữ liệu sạch. Deploy Worker đó
+     *   rồi điền domain vào WORKER_PROXY_BASE bên dưới để bật tính năng vá lỗi cho server FE.
      */
 
     // ===================== Config =====================
 
     const API_BASE = "https://anime47.love/api";
+
+    // TODO: điền domain Cloudflare Worker (xem file worker.js) đã deploy tại đây.
+    // Worker này vá lỗi offset byte MPEG-TS cho CDN cdn<N>.nonprofit.asia mà server FE dùng.
+    // Để trống ("") nếu chưa deploy — lúc đó server FE có thể không phát được, chỉ dùng HY.
+    // Ví dụ: "https://anime47-fix.ten-cua-ban.workers.dev"
+    const WORKER_PROXY_BASE = "https://anime47-fix.sumaymanlon.workers.dev";
 
     // TODO: điền tài khoản Anime47 dùng chung tại đây.
     const ACCOUNT_EMAIL = "sumaymanlon@gmail.com";
@@ -371,7 +378,7 @@
                         const streams = (watchResponse && watchResponse.streams) || [];
 
                         for (const stream of streams) {
-                            const streamUrl = stream.url;
+                            let streamUrl = stream.url;
                             if (!streamUrl) continue;
 
                             const headers = {
@@ -382,12 +389,26 @@
                                 "sec-ch-ua-platform": '"Android"',
                             };
 
-                            if (streamUrl.indexOf("vlogphim.net") !== -1) {
+                            const isVlogphim = streamUrl.indexOf("vlogphim.net") !== -1;
+
+                            if (isVlogphim) {
                                 headers["Origin"] = referer;
                                 try {
                                     headers["authority"] = new URL(streamUrl).host;
                                 } catch (e) {
                                     headers["authority"] = "pl.vlogphim.net";
+                                }
+
+                                // Server FE dùng CDN cdn<N>.nonprofit.asia cho các segment .ts, CDN này
+                                // trả về vài byte rác ở đầu mỗi segment (lỗi offset MPEG-TS). Nếu đã
+                                // deploy Worker vá lỗi (xem worker.js), route link qua đó thay vì gọi
+                                // thẳng CDN gốc. Nếu chưa cấu hình, giữ nguyên URL gốc (nhiều khả năng
+                                // sẽ không phát được do lỗi CDN đã biết).
+                                if (WORKER_PROXY_BASE) {
+                                    streamUrl =
+                                        WORKER_PROXY_BASE.replace(/\/$/, "") +
+                                        "/proxy?u=" +
+                                        encodeURIComponent(streamUrl);
                                 }
                             }
 
