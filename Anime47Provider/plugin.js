@@ -11,24 +11,25 @@
      *   SkyStream JS-plugin không có UI riêng cho việc này nên theo yêu cầu, tài khoản dùng chung
      *   được hardcode thẳng bên dưới (ACCOUNT_EMAIL / ACCOUNT_PASSWORD). Đổi lại giá trị của bạn.
      *
-     * VÁ LỖI MPEG-TS (CDN nonprofit.asia):
-     * - Bản gốc dùng `getVideoInterceptor()` (OkHttp Interceptor) để cắt bỏ vài byte rác ở đầu mỗi
-     *   segment .ts từ CDN `cdn<N>.nonprofit.asia` (server FE/vlogphim.net) — nếu không vá, player
-     *   không tìm được sync-byte MPEG-TS hợp lệ và không phát được gì.
+     * VÁ LỖI PHÁT VIDEO (server FE + HY):
+     * - Server FE dùng CDN `cdn<N>.nonprofit.asia`, CDN này trả về vài byte rác ở đầu mỗi segment
+     *   .ts khiến player không tìm được sync-byte MPEG-TS hợp lệ. Bản gốc vá bằng OkHttp Interceptor
+     *   (getVideoInterceptor()).
+     * - Server HY (Hydrax/Abyss) không trả link phát trực tiếp: trang embed chứa blob mã hoá AES-CTR
+     *   cần giải mã để lấy danh sách nguồn CDN, và video chia thành segment 2MB cũng mã hoá riêng
+     *   từng phần — bản gốc phải viết hẳn 1 Interceptor giả lập file ảo (HydraxInterceptor).
      * - SkyStream JS runtime không có hook can thiệp byte-stream khi player đang phát, nên không
-     *   thể port y hệt ở tầng plugin. Giải pháp: một Cloudflare Worker riêng (xem worker.js cùng
-     *   thư mục) đứng giữa player và CDN, tự tải + vá byte + trả lại dữ liệu sạch. Deploy Worker đó
-     *   rồi điền domain vào WORKER_PROXY_BASE bên dưới để bật tính năng vá lỗi cho server FE.
+     *   port y hệt ở tầng plugin được. Giải pháp: một Cloudflare Worker riêng (xem worker.js cùng
+     *   thư mục) đứng giữa player và nguồn thật, tự vá byte (FE) hoặc giải mã + ghép segment (HY)
+     *   rồi trả lại dữ liệu sạch. Deploy Worker đó rồi điền domain vào WORKER_PROXY_BASE bên dưới.
      */
 
     // ===================== Config =====================
 
     const API_BASE = "https://anime47.love/api";
 
-    // TODO: điền domain Cloudflare Worker (xem file worker.js) đã deploy tại đây.
-    // Worker này vá lỗi offset byte MPEG-TS cho CDN cdn<N>.nonprofit.asia mà server FE dùng.
-    // Để trống ("") nếu chưa deploy — lúc đó server FE có thể không phát được, chỉ dùng HY.
-    // Ví dụ: "https://anime47-fix.ten-cua-ban.workers.dev"
+    // Domain Cloudflare Worker (xem file worker.js) đã deploy — vá lỗi phát cho cả server FE và HY.
+    // Để trống ("") nếu chưa deploy — lúc đó cả 2 server nhiều khả năng sẽ không phát được.
     const WORKER_PROXY_BASE = "https://anime47-fix.sumaymanlon.workers.dev";
 
     // TODO: điền tài khoản Anime47 dùng chung tại đây.
@@ -42,6 +43,22 @@
         Vietnamese: ["tiếng việt", "vietnamese", "vietsub", "viet", "vi"],
         English: ["tiếng anh", "english", "engsub", "eng", "en"],
     };
+
+    // Domain server HY (Hydrax/Abyss) — khớp HY_HOSTS trong HydraxExtractor.kt gốc.
+    const HYDRAX_HOSTS = ["abysscdn.com", "playhydrax.com", "zplayer.io", "short.ink"];
+
+    function getHydraxVideoId(rawUrl) {
+        try {
+            const u = new URL(rawUrl);
+            if (u.hostname.indexOf("short.ink") !== -1) {
+                const parts = u.pathname.split("/").filter(Boolean);
+                return parts[parts.length - 1] || null;
+            }
+            return u.searchParams.get("v");
+        } catch (e) {
+            return null;
+        }
+    }
 
     // Cache token trong phiên chạy hiện tại (tương đương cachedToken trong bản Kotlin)
     let cachedToken = null;
@@ -381,34 +398,55 @@
                             let streamUrl = stream.url;
                             if (!streamUrl) continue;
 
-                            const headers = {
-                                Referer: referer,
-                                "User-Agent": DEFAULT_UA,
-                                "sec-ch-ua": '"Chromium";v="120", "Not?A_Brand";v="24"',
-                                "sec-ch-ua-mobile": "?1",
-                                "sec-ch-ua-platform": '"Android"',
-                            };
-
                             const isVlogphim = streamUrl.indexOf("vlogphim.net") !== -1;
+                            const isHydrax = HYDRAX_HOSTS.some((h) => streamUrl.indexOf(h) !== -1);
+                            let usingWorkerProxy = false;
 
-                            if (isVlogphim) {
+                            if (isVlogphim && WORKER_PROXY_BASE) {
+                                // Server FE dùng CDN cdn<N>.nonprofit.asia cho các segment .ts, CDN này
+                                // trả về vài byte rác ở đầu mỗi segment (lỗi offset MPEG-TS). Route qua
+                                // Worker để vá lỗi đó — Worker tự gắn Referer khi gọi ngược lại CDN gốc,
+                                // nên client (SkyStream) chỉ cần gọi thẳng domain Worker, không cần giả
+                                // header của domain gốc (Origin/authority) nữa.
+                                streamUrl =
+                                    WORKER_PROXY_BASE.replace(/\/$/, "") +
+                                    "/proxy?u=" +
+                                    encodeURIComponent(streamUrl);
+                                usingWorkerProxy = true;
+                            } else if (isHydrax && WORKER_PROXY_BASE) {
+                                // Server HY (Hydrax/Abyss) không trả link phát trực tiếp — trang embed
+                                // chứa 1 blob mã hoá AES-CTR cần giải mã để lấy danh sách CDN nguồn, và
+                                // video được chia thành segment 2MB cũng mã hoá riêng từng phần. Worker
+                                // tự giải mã + ghép segment + giả lập 1 file .mp4 phản hồi đúng Range
+                                // request của player. Chỉ cần truyền videoId (tham số "v" của URL gốc).
+                                const videoId = getHydraxVideoId(streamUrl);
+                                if (videoId) {
+                                    streamUrl =
+                                        WORKER_PROXY_BASE.replace(/\/$/, "") +
+                                        "/hydrax?v=" +
+                                        encodeURIComponent(videoId);
+                                    usingWorkerProxy = true;
+                                }
+                            }
+
+                            const headers = usingWorkerProxy
+                                ? {
+                                      "User-Agent": DEFAULT_UA,
+                                  }
+                                : {
+                                      Referer: referer,
+                                      "User-Agent": DEFAULT_UA,
+                                      "sec-ch-ua": '"Chromium";v="120", "Not?A_Brand";v="24"',
+                                      "sec-ch-ua-mobile": "?1",
+                                      "sec-ch-ua-platform": '"Android"',
+                                  };
+
+                            if (isVlogphim && !usingWorkerProxy) {
                                 headers["Origin"] = referer;
                                 try {
                                     headers["authority"] = new URL(streamUrl).host;
                                 } catch (e) {
                                     headers["authority"] = "pl.vlogphim.net";
-                                }
-
-                                // Server FE dùng CDN cdn<N>.nonprofit.asia cho các segment .ts, CDN này
-                                // trả về vài byte rác ở đầu mỗi segment (lỗi offset MPEG-TS). Nếu đã
-                                // deploy Worker vá lỗi (xem worker.js), route link qua đó thay vì gọi
-                                // thẳng CDN gốc. Nếu chưa cấu hình, giữ nguyên URL gốc (nhiều khả năng
-                                // sẽ không phát được do lỗi CDN đã biết).
-                                if (WORKER_PROXY_BASE) {
-                                    streamUrl =
-                                        WORKER_PROXY_BASE.replace(/\/$/, "") +
-                                        "/proxy?u=" +
-                                        encodeURIComponent(streamUrl);
                                 }
                             }
 
