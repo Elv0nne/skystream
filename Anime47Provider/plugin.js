@@ -421,9 +421,16 @@
                                 // request của player. Chỉ cần truyền videoId (tham số "v" của URL gốc).
                                 const videoId = getHydraxVideoId(streamUrl);
                                 if (videoId) {
+                                    // Dùng path "/hydrax/video.mp4?v=..." (có đuôi .mp4) thay vì chỉ
+                                    // "/hydrax?v=...". Bản Kotlin gốc (HydraxExtractor.buildRelayUrl)
+                                    // luôn đặt path relay là "$RELAY_HOST/video.mp4?...". Nhiều app
+                                    // (khả năng cao gồm SkyStream) tự nhận diện HLS vs mp4 progressive
+                                    // dựa trên đuôi file trong URL chứ không đọc Content-Type trả về,
+                                    // nên URL không đuôi có thể khiến app không nhận ra đây là mp4 và
+                                    // phát sai/không phát được, dù Worker trả dữ liệu hoàn toàn đúng.
                                     streamUrl =
                                         WORKER_PROXY_BASE.replace(/\/$/, "") +
-                                        "/hydrax?v=" +
+                                        "/hydrax/video.mp4?v=" +
                                         encodeURIComponent(videoId);
                                     usingWorkerProxy = true;
                                 }
