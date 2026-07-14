@@ -1,0 +1,19 @@
+{
+  "packageName": "com.thitbokobe.anime47",
+  "name": "Anime47",
+  "version": 1,
+  "baseUrl": "https://anime47.best",
+  "description": "Anime47 - Xem anime Vietsub/Thuyet minh chat luong cao (Sky Gen 2 port tu CloudStream plugin goc)",
+  "authors": [
+    "thitbokobe"
+  ],
+  "languages": [
+    "vi"
+  ],
+  "categories": [
+    "Anime"
+  ],
+  "domains": [
+    { "name": "anime47.best", "url": "https://anime47.best" }
+  ]
+}

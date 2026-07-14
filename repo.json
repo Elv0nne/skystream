@@ -1,0 +1,9 @@
+{
+  "name": "anime47-repo",
+  "packageName": "com.thitbokobe.anime47",
+  "description": "SkyStream plugins repository",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/Elv0nne/anime47-repo/main/dist/plugins.json"
+  ]
+}
