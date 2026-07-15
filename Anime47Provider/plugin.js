@@ -421,17 +421,18 @@
                                 // request của player. Chỉ cần truyền videoId (tham số "v" của URL gốc).
                                 const videoId = getHydraxVideoId(streamUrl);
                                 if (videoId) {
-                                    // Dùng path "/hydrax/video.mp4?v=..." (có đuôi .mp4) thay vì chỉ
-                                    // "/hydrax?v=...". Bản Kotlin gốc (HydraxExtractor.buildRelayUrl)
-                                    // luôn đặt path relay là "$RELAY_HOST/video.mp4?...". Nhiều app
-                                    // (khả năng cao gồm SkyStream) tự nhận diện HLS vs mp4 progressive
-                                    // dựa trên đuôi file trong URL chứ không đọc Content-Type trả về,
-                                    // nên URL không đuôi có thể khiến app không nhận ra đây là mp4 và
-                                    // phát sai/không phát được, dù Worker trả dữ liệu hoàn toàn đúng.
+                                    // Dùng path "/hydrax/{videoId}.mp4" (id nằm trong path, URL kết
+                                    // thúc đúng bằng đuôi ".mp4", không có query phía sau) thay vì
+                                    // "/hydrax/video.mp4?v=...". Một số player nhận diện định dạng
+                                    // bằng cách kiểm tra url.endsWith(".mp4") thay vì đọc Content-Type
+                                    // trả về; với query string ở cuối, kiểm tra đó luôn ra false và
+                                    // player có thể từ chối phát mà không hề gọi network — khớp với
+                                    // hiện tượng "chọn HY là lỗi ngay, Worker không nhận request nào".
                                     streamUrl =
                                         WORKER_PROXY_BASE.replace(/\/$/, "") +
-                                        "/hydrax/video.mp4?v=" +
-                                        encodeURIComponent(videoId);
+                                        "/hydrax/" +
+                                        encodeURIComponent(videoId) +
+                                        ".mp4";
                                     usingWorkerProxy = true;
                                 }
                             }
