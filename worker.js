@@ -560,17 +560,38 @@ export default {
         headers: {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Headers": "*",
-          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
         },
       });
     }
 
+    // Nhiều player (đặc biệt ExoPlayer trên Android) gửi HEAD trước khi phát
+    // để dò Content-Type/Content-Length/Accept-Ranges. Trước đây route này
+    // không tồn tại nên HEAD rơi vào nhánh mặc định (text thường, không phải
+    // video) — khiến player kết luận nguồn hỏng ngay lập tức, trước khi kịp
+    // gửi GET thật. Xử lý bằng cách chạy y hệt logic GET rồi trả lại cùng
+    // headers nhưng bỏ body, để không có 2 luồng logic tách rời dễ lệch nhau.
+    const isHead = request.method === "HEAD";
+    const effectiveRequest = isHead
+      ? new Request(request.url, { method: "GET", headers: request.headers })
+      : request;
+
     try {
+      let response = null;
       if (url.pathname === "/proxy") {
-        return await handleProxy(request, url);
+        response = await handleProxy(effectiveRequest, url);
+      } else if (url.pathname === "/hydrax" || url.pathname.indexOf("/hydrax/") === 0) {
+        // startsWith thay vì so khớp tuyệt đối: chấp nhận cả "/hydrax" lẫn
+        // biến thể có đuôi file như "/hydrax/video.mp4" (client có thể tự
+        // thêm đuôi .mp4 vào path để app nhận diện đúng định dạng phát progressive).
+        response = await handleHydrax(effectiveRequest, url);
       }
-      if (url.pathname === "/hydrax") {
-        return await handleHydrax(request, url);
+
+      if (response) {
+        if (isHead) {
+          return new Response(null, { status: response.status, headers: response.headers });
+        }
+        return response;
       }
     } catch (e) {
       return new Response("Worker error: " + (e && e.message ? e.message : String(e)), {
