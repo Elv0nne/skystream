@@ -262,7 +262,7 @@ function getVideoIdFromUrl(rawUrl) {
 // Cloudflare Workers (free plan) giới hạn ~50 subrequest / lần invocation. Mỗi segment Abyss = 1
 // subrequest, nên KHÔNG BAO GIỜ được cố tải toàn bộ file trong 1 lần gọi — luôn ép trả về từng
 // phần nhỏ và để player tự gửi tiếp Range request cho phần sau (đúng hành vi HTTP streaming chuẩn).
-const MAX_SEGMENTS_PER_REQUEST = 20; // an toàn dưới ngưỡng 50, còn dư chỗ cho subrequest khác
+const MAX_SEGMENTS_PER_REQUEST = 45; // Cloudflare free tier: ~50 subrequest/invocation; chừa 1 cho fetch trang embed
 
 function parseRange(rangeHeader, totalSize) {
   if (!rangeHeader) {
@@ -397,6 +397,13 @@ async function handleHydrax(request, reqUrl) {
     return new Response("Segment fetch error: " + e.message, { status: 502 });
   }
 
+  const debugHeaders = {
+    "X-Debug-Range-Header": rangeHeader || "(none)",
+    "X-Debug-Resolved-Range": `${start}-${end}`,
+    "X-Debug-Total-Size": String(size),
+    "X-Debug-Segments-Fetched": String(Math.ceil((end - start + 1) / FRAGMENT_SIZE)),
+  };
+
   const isFullFile = start === 0 && end === size - 1;
 
   const corsHeaders = {
@@ -410,6 +417,7 @@ async function handleHydrax(request, reqUrl) {
     "Accept-Ranges": "bytes",
     "Content-Length": String(bodyBytes.length),
     ...corsHeaders,
+    ...debugHeaders,
   };
 
   if (!isFullFile) {
